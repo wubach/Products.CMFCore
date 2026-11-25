@@ -229,6 +229,7 @@ class DirectoryInformation:
                            properties=metadata.getProperties())
                     ob_id = ob.getId()
                     data[ob_id] = ob
+                    ob.fs_permissions = metadata.getSecurity()
                     objects.append({'id': ob_id, 'meta_type': ob.meta_type})
             else:
                 pos = entry.rfind('.')
@@ -457,6 +458,16 @@ class DirectoryViewSurrogate(Folder):
         d.update(real.__dict__)
         d['_real'] = real
         d['_objects'] = objects
+
+        # fs-based security
+        permissions = getattr(self, 'fs_permissions', None)
+        if permissions:
+            for name in permissions.keys():
+                acquire, roles = permissions[name]
+                try:
+                    self.manage_permission(name,roles,acquire)
+                except ValueError:
+                    logger.exception("Error setting permissions")
 
     def __setattr__(self, name, value):
         d = self.__dict__
