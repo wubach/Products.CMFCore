@@ -14,6 +14,7 @@
 """
 
 import os
+import logging
 
 from AccessControl.class_init import InitializeClass
 from AccessControl.Permission import Permission
@@ -27,7 +28,10 @@ from App.special_dtml import HTML
 from DateTime.DateTime import DateTime
 from OFS.Cache import Cacheable
 from OFS.role import RoleManager
+from OFS.PropertyManager import PropertyManager
 from OFS.SimpleItem import Item
+from ZPublisher.Converters import get_converter
+
 from zope.component import getUtility
 
 from Products.PythonScripts.standard import html_quote
@@ -37,8 +41,84 @@ from .permissions import ManagePortal
 from .permissions import View
 from .permissions import ViewManagementScreens
 
+logger = logging.getLogger('CMFCore.FSObject')
 
-class FSObject(Implicit, Item, RoleManager, Cacheable):
+class PropertyProcessor(PropertyManager):
+
+    """ Mixin class to apply properties to FSObject or DirectoryView
+    instances.
+
+    FSMetadata.getProperties() returns properties simply as key-value
+    dictionary. But to make them bevave like Zope properties we need a
+    property description with type specification. eg:
+
+      self._properties =>
+      ({'type': 'string', 'id': 'title', 'mode': 'wd'},
+       {'type': 'boolean', 'id': 'menu_show', 'mode': 'wd'},
+       )
+
+    Note: subclassing PropertyManager is necessary! (Even tough its
+    not explicitly used.) Otherwise the "getProperty" method would
+    be acquired from DirectoryViewSurrogate::
+
+      >>> app.vatest.aac.urlme.genehmigen_html.getProperty('menu_title')
+      ...
+      (Pdb) p self
+      <DirectoryViewSurrogate at /vatest/aac/urlme>
+
+    and we would get the (wrong) properties from /vatest/aac/urlme
+    (instead of /vatest/aac/urlme/genehmigen_html).
+    """
+
+    def process_properties(self, properties):
+        """Create property definitions
+
+        Type specifiers (default: string) can be specified after name
+        (e.g. show_menu*boolean or title*utext)
+        """
+
+        propdefs, propdict = self.convert_properties(properties)
+        if propdefs:
+            self.__dict__.update(propdict)
+            self._properties = propdefs
+
+    def convert_properties(self, properties):
+        """ type convert properties and build property description
+
+        Type specifiers (default: string) can be specified after name
+        (e.g. show_menu*boolean or title*utext) in *.metadata Files.
+        """
+
+        propdict = {}
+        propdefs = []
+        for pn, pv in properties.items():
+            pn_parts = pn.split('*')
+            if len(pn_parts) == 3:
+                # form: menu_title*utf8*ustring = "Men\xc3\xbc"
+                try:
+                    if isinstance(pv, bytes):
+                        pv = pv.decode(pn_parts[1])
+                    pn_parts = [pn_parts[0], pn_parts[2]]
+                except LookupError:     # invalid encoding
+                    pass
+            if len(pn_parts) == 2:
+                propid, proptype = pn_parts[0], pn_parts[1]
+            else:
+                propid, proptype = pn, 'string'
+            converter = get_converter(proptype)
+            if not converter:
+                logger.exception('unknown converter: %s' % (proptype,))
+                continue
+            pv = converter(pv)
+            propdict[propid] = pv
+            d = {'type': proptype, 'id': propid, 'mode': 'r'}
+            propdefs.append(d)
+        if propdefs:
+            propdefs = tuple(propdefs)
+
+        return propdefs, propdict
+
+class FSObject(Implicit, Item, RoleManager, PropertyProcessor, Cacheable):
 
     """FSObject is a base class for all filesystem based look-alikes.
 
@@ -62,6 +142,8 @@ class FSObject(Implicit, Item, RoleManager, Cacheable):
             self.__dict__.update(properties)
             if fullname and properties.get('keep_extension', 0):
                 id = fullname
+
+            self.process_properties(properties)
 
             cache = properties.get('cache')
             if cache:

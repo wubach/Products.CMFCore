@@ -33,6 +33,7 @@ from zope.interface import implementer
 
 from .FSMetadata import FSMetadata
 from .FSObject import BadFile
+from .FSObject import PropertyProcessor
 from .interfaces import IDirectoryView
 from .permissions import AccessContentsInformation as ACI
 from .permissions import ManagePortal
@@ -203,6 +204,14 @@ class DirectoryInformation:
         data = {}
         objects = []
         types = self._readTypesFile()
+        # metadata of the FS DirectoryView root itself (.metadata)
+        filepath = os.path.join(self._filepath, '') # add trailing slash
+        metadata = FSMetadata(filepath)
+        metadata.read()
+        pdefs,pdict = PropertyProcessor().convert_properties(
+            metadata.getProperties())
+        data.update(pdict)
+        data['_properties'] = pdefs
         for entry in _filtered_listdir(self._filepath, ignore=self.ignore):
             if not self._isAllowableFilename(entry):
                 continue
@@ -398,7 +407,7 @@ def listFolderHierarchy(ob, path, rval, adding_meta_type=None, max=0):
 
 
 @implementer(IDirectoryView)
-class DirectoryView(Persistent):
+class DirectoryView(Persistent, PropertyProcessor):
 
     """ Directory views mount filesystem directories.
     """
@@ -412,6 +421,7 @@ class DirectoryView(Persistent):
             # Since props come from the filesystem, this should be
             # safe.
             self.__dict__.update(properties)
+            self.process_properties(properties)
 
         self.id = id
         self._dirpath = reg_key
